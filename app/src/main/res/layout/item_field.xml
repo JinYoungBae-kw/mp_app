@@ -1,0 +1,5 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:orientation="vertical"
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="14dp">
+    <TextView android:id="@+id/field_label" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="14sp" android:paddingBottom="6dp" />
+    <EditText android:id="@+id/field_input" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textCapSentences" android:saveEnabled="true" />
+</LinearLayout>

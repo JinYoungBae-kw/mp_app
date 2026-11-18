@@ -1,0 +1,48 @@
+# Local build and IDE files
+.gradle/
+.idea/
+.kotlin/
+.cxx/
+.externalNativeBuild/
+**/build/
+out/
+captures/
+*.iml
+*.ipr
+*.iws
+
+# Machine-specific settings
+local.properties
+gradle-local.properties
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Credentials and signing files
+.env
+.env.*
+!.env.example
+secrets.properties
+keystore.properties
+key.properties
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+service-account*.json
+serviceAccount*.json
+*-firebase-adminsdk-*.json
+
+# Local service configuration
+google-services.json
+GoogleService-Info.plist
+
+# Generated packages, logs and dumps
+*.apk
+*.aab
+*.apks
+*.log
+*.hprof
+hs_err_pid*

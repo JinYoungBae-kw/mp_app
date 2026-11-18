@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:name=".MoadealApplication"
+        android:allowBackup="true"
+        android:label="모아딜"
+        android:icon="@drawable/ic_acorn"
+        android:theme="@style/Theme.Moadeal"
+        android:supportsRtl="true">
+        <activity android:name=".RegionActivity" android:exported="false" />
+        <activity android:name=".CommunityActivity" android:exported="false" />
+        <activity android:name=".ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".RoomFormActivity" android:exported="false" />
+        <activity android:name=".ProfileActivity" android:exported="false" />
+        <activity android:name=".HistoryActivity" android:exported="false" />
+        <activity android:name=".AttendanceActivity" android:exported="false" />
+        <activity android:name=".CollectionActivity" android:exported="false" />
+        <activity android:name=".RequestFormActivity" android:exported="false" />
+        <activity android:name=".OfferFormActivity" android:exported="false" />
+        <activity android:name=".OfferListActivity" android:exported="false" />
+        <activity android:name=".DetailActivity" android:exported="false" />
+        <activity android:name=".VerificationActivity" android:exported="false" />
+        <activity android:name=".HomeActivity" android:exported="false" />
+        <activity android:name=".LoginActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -1,0 +1,15 @@
+<resources>
+    <item type="id" name="request_name" />
+    <item type="id" name="request_description" />
+    <item type="id" name="request_category" />
+    <item type="id" name="request_price" />
+    <item type="id" name="request_target" />
+    <item type="id" name="offer_price" />
+    <item type="id" name="offer_quantity" />
+    <item type="id" name="profile_name" />
+    <item type="id" name="room_name" />
+    <item type="id" name="room_area" />
+    <item type="id" name="room_description" />
+    <item type="id" name="room_category" />
+    <item type="id" name="chat_input" />
+</resources>
