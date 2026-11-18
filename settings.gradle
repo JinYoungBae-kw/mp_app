@@ -9,6 +9,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        exclusiveContent {
+            forRepository {
+                maven { url = 'https://repository.map.naver.com/archive/maven' }
+            }
+            filter { includeGroup('com.naver.maps') }
+        }
     }
 }
 rootProject.name = 'MoadealJava'

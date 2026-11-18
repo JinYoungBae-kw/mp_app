@@ -1,6 +1,7 @@
 package com.moadeal;
 
 import android.app.Activity;
+import android.app.DatePickerDialog;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -14,8 +15,13 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
+import com.google.android.gms.tasks.Task;
 import java.io.InputStream;
+import java.util.Calendar;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 
 final class Ui {
     static final int BROWN = Color.rgb(147, 68, 35), ORANGE = Color.rgb(238, 126, 40);
@@ -23,6 +29,7 @@ final class Ui {
     private static final android.util.LruCache<String, Bitmap> images = new android.util.LruCache<>(16 * 1024 * 1024) {
         @Override protected int sizeOf(String key, Bitmap bitmap) { return bitmap.getByteCount(); }
     };
+    private static final Map<String, Task<Bitmap>> remoteImages = new HashMap<>();
 
     static int dp(android.content.Context context, float value) {
         return Math.round(value * context.getResources().getDisplayMetrics().density);
@@ -121,6 +128,45 @@ final class Ui {
         return image;
     }
 
+    static ImageView productPhoto(BaseActivity activity, ViewGroup parent, Models.Product product, int height) {
+        ImageView view = new ImageView(activity);
+        parent.addView(view, new ViewGroup.LayoutParams(-1, dp(activity, height)));
+        productImage(activity, view, product);
+        return view;
+    }
+
+    private static void productImage(BaseActivity activity, ImageView view, Models.Product product) {
+        if (!product.remote || !product.hasRemotePhoto) {
+            image(activity, view, product.photo);
+            return;
+        }
+        image(activity, view, product.photo);
+        String key = "firestore:" + product.id;
+        Bitmap cached = images.get(key);
+        if (cached != null) {
+            showProductImage(view, product.title, cached);
+            return;
+        }
+        Task<Bitmap> loading = remoteImages.get(key);
+        if (loading == null) {
+            loading = activity.trades.loadPhoto(product.id).onSuccessTask(ProductImages::decode);
+            remoteImages.put(key, loading);
+            loading.addOnCompleteListener(result -> {
+                remoteImages.remove(key, result);
+                if (result.isSuccessful() && result.getResult() != null) images.put(key, result.getResult());
+            });
+        }
+        loading.addOnSuccessListener(activity, bitmap -> {
+            if (bitmap != null) showProductImage(view, product.title, bitmap);
+        });
+    }
+
+    private static void showProductImage(ImageView view, String title, Bitmap bitmap) {
+        view.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        view.setImageBitmap(bitmap);
+        view.setContentDescription(title + " 사진");
+    }
+
     static EditText field(Activity activity, LinearLayout fields, String label, String initial, int inputType, int id) {
         View item = activity.getLayoutInflater().inflate(R.layout.item_field, fields, false);
         ((TextView) item.findViewById(R.id.field_label)).setText(label);
@@ -142,6 +188,19 @@ final class Ui {
         spinner.setSelection(Math.max(0, selected));
         parent.addView(spinner, new ViewGroup.LayoutParams(-1, dp(activity, 48)));
         return spinner;
+    }
+
+    static void pickEndDate(Activity activity, long selectedDate, LongConsumer onSelected) {
+        Calendar initial = Calendar.getInstance();
+        initial.setTimeInMillis(selectedDate);
+        DatePickerDialog dialog = new DatePickerDialog(activity, (picker, year, month, day) -> {
+            Calendar endDate = Calendar.getInstance();
+            endDate.set(year, month, day, 23, 59, 59);
+            onSelected.accept(endDate.getTimeInMillis());
+        }, initial.get(Calendar.YEAR), initial.get(Calendar.MONTH), initial.get(Calendar.DAY_OF_MONTH));
+        dialog.getDatePicker().setMinDate(System.currentTimeMillis() - 1000);
+        dialog.getDatePicker().setMaxDate(System.currentTimeMillis() + 90L * 86_400_000);
+        dialog.show();
     }
 
     static String value(EditText field) { return field.getText().toString().trim(); }
@@ -171,16 +230,18 @@ final class Ui {
         activity.startActivity(intent);
     }
 
+    private static void openProductDetail(BaseActivity activity, Models.Product product) {
+        if (!product.remote && product.sellerListing() && !activity.store.seller()) product.previewViews++;
+        open(activity, DetailActivity.class, "product", product.id);
+    }
+
     static void productRow(BaseActivity activity, ViewGroup parent, Models.Product product, String description) {
         View row = activity.getLayoutInflater().inflate(R.layout.item_row, parent, false);
         ((TextView) row.findViewById(R.id.row_title)).setText(product.title);
         ((TextView) row.findViewById(R.id.row_description)).setText(description);
-        image(activity, row.findViewById(R.id.row_photo), product.photo);
+        productImage(activity, row.findViewById(R.id.row_photo), product);
         row.setContentDescription(product.title + " " + description);
-        row.setOnClickListener(view -> {
-            if (product.sellerListing() && !activity.store.seller()) product.previewViews++;
-            open(activity, DetailActivity.class, "product", product.id);
-        });
+        row.setOnClickListener(view -> openProductDetail(activity, product));
         parent.addView(row);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.bottomMargin = dp(activity, 10); row.setLayoutParams(params);
@@ -198,20 +259,16 @@ final class Ui {
             ((TextView) card.findViewById(R.id.product_stage)).setText(product.stageLabel());
             ((TextView) card.findViewById(R.id.product_meta)).setText(product.region.label() + "\n참여 " + product.joined() + "/" + product.target + "명"
                 + (detail == null ? "" : "\n" + detail.apply(product)));
-            image(activity, card.findViewById(R.id.product_photo), product.photo);
             ImageView photo = card.findViewById(R.id.product_photo);
+            productImage(activity, photo, product);
             photo.setContentDescription(product.title + " 사진");
             Button heart = card.findViewById(R.id.product_favorite);
             bindHeart(activity, heart, product);
-            heart.setOnClickListener(view -> {
-                activity.store.toggleFavorite(product);
+            heart.setOnClickListener(view -> toggleFavorite(activity, product, () -> {
                 bindHeart(activity, heart, product);
                 activity.onFavoriteChanged();
-            });
-            card.setOnClickListener(view -> {
-                if (product.sellerListing() && !activity.store.seller()) product.previewViews++;
-                open(activity, DetailActivity.class, "product", product.id);
-            });
+            }));
+            card.setOnClickListener(view -> openProductDetail(activity, product));
             GridLayout.LayoutParams params = new GridLayout.LayoutParams();
             params.width = 0; params.height = -2;
             params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f);
@@ -225,5 +282,16 @@ final class Ui {
         button.setText(favorite ? "♥" : "♡");
         button.setTextColor(favorite ? ORANGE : BROWN);
         button.setContentDescription(product.title + (favorite ? " 관심상품에서 빼기" : " 관심상품에 담기"));
+    }
+
+    static void toggleFavorite(BaseActivity activity, Models.Product product, Runnable changed) {
+        Store store = activity.store;
+        String before = store.favoriteDate(store.account, product);
+        store.toggleFavorite(product);
+        if (product.remote && (before.isEmpty() || before.equals(Store.today()))) {
+            activity.trades.setFavorite(product.id, before.isEmpty()).addOnFailureListener(activity,
+                error -> activity.note("관심상품은 이 기기에 저장했지만 랭킹을 갱신하지 못했어요."));
+        }
+        changed.run();
     }
 }

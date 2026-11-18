@@ -11,17 +11,17 @@ public class ViewsChart extends View {
     public ViewsChart(Context context, AttributeSet attributes) { super(context, attributes); }
     void setProduct(Models.Product product) {
         this.product = product;
-        setContentDescription("최근 7일 조회수 " + product.views() + "회. 예시 통계");
+        setContentDescription("최근 7일 조회수 " + product.views() + "회" + (product.remote ? "" : ". 예시 통계"));
         invalidate();
     }
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         if (product == null) return;
         int max = 1;
-        for (int i = 0; i < 7; i++) max = Math.max(max, product.sampleViews[i] + (i == 6 ? product.previewViews : 0));
+        for (int i = 0; i < 7; i++) max = Math.max(max, product.viewsAt(i));
         float width = getWidth() / 7f, baseline = getHeight() - Ui.dp(getContext(), 28);
         for (int i = 0; i < 7; i++) {
-            int count = product.sampleViews[i] + (i == 6 ? product.previewViews : 0);
+            int count = product.viewsAt(i);
             float height = (baseline - Ui.dp(getContext(), 25)) * count / max;
             float center = width * (i + .5f), halfBar = Math.min(width / 4, Ui.dp(getContext(), 12));
             paint.setColor(i == 6 ? Ui.BROWN : Ui.ORANGE);

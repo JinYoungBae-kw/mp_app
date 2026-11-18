@@ -1,8 +1,10 @@
 package com.moadeal;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 final class Models {
@@ -39,30 +41,43 @@ final class Models {
 
     static class Product {
         String id, title, photo = "", description = "", owner = BUYER;
+        boolean sellerProduct, remote, hasRemotePhoto;
+        int remoteParticipantCount;
         Region region = new Region();
         int price, target = 6, category, sampleParticipants, likes, comparisonPrice, previewViews;
         long deadline = System.currentTimeMillis() + 7L * 86400000;
         String likesDate = "";
         int[] sampleViews = {0, 0, 0, 0, 0, 0, 0};
+        final Map<Long, Integer> remoteViews = new HashMap<>();
         final Set<String> members = new HashSet<>();
         final List<Offer> offers = new ArrayList<>();
         final List<Question> questions = new ArrayList<>();
         Offer selected;
 
-        boolean sellerListing() { return SELLER.equals(owner); }
-        int joined() { return members.size() + sampleParticipants; }
+        boolean sellerListing() { return sellerProduct; }
+        int joined() { return remote ? remoteParticipantCount : members.size() + sampleParticipants; }
         int remaining() { return target - joined(); }
         boolean completed() { return sellerListing() && joined() >= target; }
         int stage() { return selected != null || completed() ? 2 : joined() >= target ? 1 : 0; }
         boolean recruiting() { return stage() == 0 && deadline > System.currentTimeMillis(); }
+        boolean awaitingOfferSelection() { return stage() == 1; }
+        boolean canReceiveOffer() { return awaitingOfferSelection() && offers.isEmpty(); }
         String stageLabel() {
             if (sellerListing()) return completed() ? "판매완료" : recruiting() ? "판매진행중" : "모집 마감";
-            return new String[]{"모집 중", "제안 접수", "선택 완료"}[stage()];
+            return switch (stage()) {
+                case 1 -> "제안 접수";
+                case 2 -> "선택 완료";
+                default -> recruiting() ? "모집 중" : "모집 마감";
+            };
         }
         double savings() { return comparisonPrice > 0 ? (comparisonPrice - price) / (double) comparisonPrice : 0; }
+        int viewsAt(int index) {
+            if (remote) return remoteViews.getOrDefault(Store.epochDay() - 6 + index, 0);
+            return sampleViews[index] + (index == 6 ? previewViews : 0);
+        }
         int views() {
-            int total = previewViews;
-            for (int value : sampleViews) total += value;
+            int total = 0;
+            for (int index = 0; index < 7; index++) total += viewsAt(index);
             return total;
         }
     }
@@ -83,7 +98,7 @@ final class Models {
     }
 
     static class Question {
-        String text, answer;
+        String id, text, answer;
         Question(String text, String answer) { this.text = text; this.answer = answer; }
     }
 

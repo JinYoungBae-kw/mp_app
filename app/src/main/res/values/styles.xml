@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="brown">#934423</color>
-    <color name="orange">#EE7E28</color>
     <color name="ink">#3D2418</color>
     <color name="cream">#FFF7EE</color>
     <style name="Theme.Moadeal" parent="android:style/Theme.Material.Light.NoActionBar">

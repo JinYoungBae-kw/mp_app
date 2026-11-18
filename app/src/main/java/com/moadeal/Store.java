@@ -2,38 +2,57 @@ package com.moadeal;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.util.Base64;
+import com.google.firebase.firestore.ListenerRegistration;
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.ObjectInputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.UUID;
+import java.util.function.Consumer;
 import static com.moadeal.Models.*;
 
 final class Store {
+    private static final String DEMO_BUYER_PREFIX = "demo.buyer.";
+
     final Context context;
     final SharedPreferences preferences;
     final List<Product> products = new ArrayList<>();
     final List<Room> rooms = new ArrayList<>();
     final List<Region> demoRegions = new ArrayList<>();
+    private final Map<String, String> demoBuyerIds = new TreeMap<>();
+    private final Map<String, String> firebaseNames = new HashMap<>();
+    private FirebaseAccounts.Profile firebaseProfile;
+    private FirebaseTrades trades;
+    private final Map<Runnable, Consumer<Exception>> tradeObservers = new LinkedHashMap<>();
+    private final List<ListenerRegistration> tradeListeners = new ArrayList<>();
+    private Set<String> tradeMemberships = Collections.emptySet();
+    private final Map<String, Map<Long, Integer>> tradeLikes = new HashMap<>();
+    private final Map<String, Map<Long, Integer>> tradeViews = new HashMap<>();
+    private int tradeObservation;
     JSONObject regions;
     String account = BUYER;
 
     Store(Context context) {
         this.context = context.getApplicationContext();
         preferences = context.getSharedPreferences("moadeal_native", Context.MODE_PRIVATE);
+        for (var entry : preferences.getAll().entrySet()) {
+            if (entry.getKey().startsWith(DEMO_BUYER_PREFIX) && entry.getValue() instanceof String name) {
+                demoBuyerIds.put(name, entry.getKey().substring(DEMO_BUYER_PREFIX.length()));
+            }
+        }
         try {
             regions = readJson("data/korea_regions.json");
             seedCatalog();
@@ -55,13 +74,165 @@ final class Store {
     }
 
     static String today() { return LocalDate.now(ZoneId.of("Asia/Seoul")).toString(); }
+    static long epochDay() { return LocalDate.now(ZoneId.of("Asia/Seoul")).toEpochDay(); }
     static String date(long time) {
         return java.time.Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault())
             .format(DateTimeFormatter.ofPattern("M월 d일"));
     }
     static String won(int price) { return String.format(java.util.Locale.KOREA, "%,d원", price); }
-    static String accountId(String account) { return SELLER.equals(account) ? "moadeal_seller" : "moadeal_host"; }
-    boolean seller() { return SELLER.equals(account); }
+    String accountId(String account) {
+        if (SELLER.equals(account)) return "moadeal_seller";
+        String firebaseName = firebaseNames.get(account);
+        if (firebaseName != null) return firebaseName;
+        return preferences.getString(DEMO_BUYER_PREFIX + account, "moadeal_host");
+    }
+
+    void applyFirebaseProfile(FirebaseAccounts.Profile profile) {
+        if (!hasFirebaseProfile(profile.uid)) clearFirebaseTrades();
+        firebaseProfile = profile;
+        account = "firebase:" + profile.uid;
+        firebaseNames.put(account, profile.name);
+        startTradeObservation();
+    }
+
+    boolean hasFirebaseProfile(String uid) {
+        return firebaseProfile != null && firebaseProfile.uid.equals(uid);
+    }
+
+    void clearFirebaseProfile() {
+        firebaseProfile = null;
+        account = BUYER;
+        clearFirebaseTrades();
+    }
+
+    void useFirebaseTrades(FirebaseTrades repository) { trades = repository; }
+
+    void addTradeObserver(Runnable changed, Consumer<Exception> error) {
+        tradeObservers.put(changed, error);
+        startTradeObservation();
+    }
+
+    void removeTradeObserver(Runnable changed) {
+        tradeObservers.remove(changed);
+        if (tradeObservers.isEmpty()) stopTradeObservation();
+    }
+
+    private void startTradeObservation() {
+        if (trades == null || firebaseProfile == null || tradeObservers.isEmpty() || !tradeListeners.isEmpty()) return;
+        int observation = ++tradeObservation;
+        boolean[] errorShown = {false};
+        Consumer<Exception> reportError = error -> {
+            if (observation != tradeObservation || errorShown[0]) return;
+            errorShown[0] = true;
+            for (Consumer<Exception> callback : new ArrayList<>(tradeObservers.values())) callback.accept(error);
+        };
+        tradeListeners.add(trades.listenProducts(snapshot -> {
+            if (observation != tradeObservation) return;
+            applyTradeProducts(snapshot);
+            notifyTradeObservers();
+        }, reportError));
+        tradeListeners.add(trades.listenMemberships(snapshot -> {
+            if (observation != tradeObservation) return;
+            tradeMemberships = snapshot;
+            for (Product product : products) if (product.remote) applyTradeMembership(product);
+            notifyTradeObservers();
+        }, reportError));
+        if (seller()) {
+            tradeListeners.add(trades.listenViews(snapshot -> {
+                if (observation != tradeObservation) return;
+                tradeViews.clear();
+                for (FirebaseTrades.DailyViews entry : snapshot) {
+                    tradeViews.computeIfAbsent(entry.productId(), unused -> new HashMap<>()).put(entry.day(), entry.views());
+                }
+                for (Product product : products) if (product.remote) applyTradeViews(product);
+                notifyTradeObservers();
+            }, reportError));
+        } else {
+            tradeListeners.add(trades.listenLikes(snapshot -> {
+                if (observation != tradeObservation) return;
+                tradeLikes.clear();
+                for (FirebaseTrades.DailyLikes entry : snapshot) {
+                    tradeLikes.computeIfAbsent(entry.productId(), unused -> new HashMap<>()).put(entry.day(), entry.likes());
+                }
+                notifyTradeObservers();
+            }, reportError));
+        }
+    }
+
+    private void applyTradeProducts(List<Product> snapshot) {
+        Map<String, Product> previous = new HashMap<>();
+        for (Product product : products) if (product.remote) previous.put(product.id, product);
+        products.removeIf(product -> product.remote);
+        for (Product product : snapshot) {
+            Product existing = previous.get(product.id);
+            if (existing != null && product.hasRemotePhoto) product.photo = existing.photo;
+            applyTradeMembership(product);
+            applyTradeViews(product);
+        }
+        products.addAll(0, snapshot);
+    }
+
+    void putFirebaseProduct(Product product) {
+        if (firebaseProfile == null || !account.equals(product.owner) || product(product.id) != null) return;
+        product.remote = true;
+        product.hasRemotePhoto = !product.photo.isEmpty();
+        product.remoteParticipantCount = product.sellerListing() ? 0 : 1;
+        applyTradeMembership(product);
+        products.add(0, product);
+        notifyTradeObservers();
+    }
+
+    private void applyTradeMembership(Product product) {
+        product.members.clear();
+        if (tradeMemberships.contains(product.id) || !product.sellerListing() && account.equals(product.owner)) {
+            product.members.add(account);
+        }
+    }
+
+    private void applyTradeViews(Product product) {
+        product.remoteViews.clear();
+        Map<Long, Integer> days = tradeViews.get(product.id);
+        if (days != null) product.remoteViews.putAll(days);
+    }
+
+    private void notifyTradeObservers() {
+        for (Runnable callback : new ArrayList<>(tradeObservers.keySet())) callback.run();
+    }
+
+    private void stopTradeObservation() {
+        tradeObservation++;
+        for (ListenerRegistration listener : tradeListeners) listener.remove();
+        tradeListeners.clear();
+    }
+
+    private void clearFirebaseTrades() {
+        stopTradeObservation();
+        tradeMemberships = Collections.emptySet();
+        tradeLikes.clear();
+        tradeViews.clear();
+        products.removeIf(product -> product.remote);
+    }
+
+    Map<String, String> demoBuyers() {
+        Map<String, String> buyers = new LinkedHashMap<>();
+        demoBuyerIds.forEach((name, id) -> buyers.put(id, name));
+        return buyers;
+    }
+
+    String registerDemoBuyer(String name) {
+        String existing = demoBuyerIds.get(name);
+        if (existing != null) return existing;
+
+        String id = "buyer-" + UUID.randomUUID();
+        preferences.edit().putString(DEMO_BUYER_PREFIX + id, name)
+            .putString("profile.name." + id, name).apply();
+        demoBuyerIds.put(name, id);
+        return id;
+    }
+
+    boolean seller() {
+        return firebaseProfile == null ? SELLER.equals(account) : FirebaseAccounts.SELLER_ROLE.equals(firebaseProfile.role);
+    }
 
     Product product(String id) {
         for (Product product : products) if (product.id.equals(id)) return product;
@@ -115,7 +286,7 @@ final class Store {
     private Product seedSeller(String id, String title, int price, int target, int joined,
             String photo, String description, int[] views, int category) {
         Product p = seed(id, title, price, target, photo, demoRegions.get(0));
-        p.members.clear(); p.owner = SELLER; p.sampleParticipants = joined;
+        p.members.clear(); p.owner = SELLER; p.sellerProduct = true; p.sampleParticipants = joined;
         p.description = description; p.sampleViews = views; p.category = category;
         p.deadline = System.currentTimeMillis() + 6L * 86400000;
         return p;
@@ -147,55 +318,33 @@ final class Store {
         return null;
     }
 
-    String legacyString(String key) {
-        Object value = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE).getAll().get("flutter." + key);
-        return value instanceof String ? (String) value : "";
+    String profileName() {
+        return firebaseProfile == null ? preferences.getString("profile.name." + account, "") : firebaseProfile.name;
     }
-
-    String profileName() { return preferences.getString("profile.name." + account, legacyString("profile.name." + account)); }
     void saveProfile(String name) { preferences.edit().putString("profile.name." + account, name).apply(); }
 
     String favoriteKey(String account, Product product) { return "favorite." + account + "." + product.id; }
-    String favoriteDate(String account, Product product) {
-        String key = favoriteKey(account, product);
-        return preferences.getString(key, legacyString(key));
-    }
+    String favoriteDate(String account, Product product) { return preferences.getString(favoriteKey(account, product), ""); }
     boolean favorite(Product product) { return !favoriteDate(account, product).isEmpty(); }
     void toggleFavorite(Product product) {
         preferences.edit().putString(favoriteKey(account, product), favorite(product) ? "" : today()).apply();
     }
     int likesToday(Product product) {
-        return (today().equals(product.likesDate) ? product.likes : 0)
-            + (today().equals(favoriteDate(BUYER, product)) ? 1 : 0)
-            + (today().equals(favoriteDate(SELLER, product)) ? 1 : 0);
+        if (product.remote) {
+            Map<Long, Integer> days = tradeLikes.get(product.id);
+            return days == null ? 0 : days.getOrDefault(epochDay(), 0);
+        }
+        String date = today();
+        int count = (date.equals(product.likesDate) ? product.likes : 0)
+            + (date.equals(favoriteDate(BUYER, product)) ? 1 : 0)
+            + (date.equals(favoriteDate(SELLER, product)) ? 1 : 0);
+        for (String buyer : demoBuyerIds.values()) if (date.equals(favoriteDate(buyer, product))) count++;
+        for (String uid : firebaseNames.keySet()) if (date.equals(favoriteDate(uid, product))) count++;
+        return count;
     }
 
     Set<String> attendance() {
-        String key = "attendance." + account;
-        if (preferences.contains(key)) return new HashSet<>(preferences.getStringSet(key, java.util.Collections.emptySet()));
-        String legacy = legacyString(key);
-        Set<String> dates = new HashSet<>();
-        try {
-            if (legacy.startsWith("VGhpcyBpcyB0aGUgcHJlZml4")) {
-                String prefix = "VGhpcyBpcyB0aGUgcHJlZml4IGZvciBhIGxpc3Qu";
-                String encoded = legacy.substring(prefix.length());
-                if (encoded.startsWith("!")) encoded = encoded.substring(1);
-                if (encoded.startsWith("[")) {
-                    JSONArray values = new JSONArray(encoded);
-                    for (int i = 0; i < values.length(); i++) dates.add(values.getString(i));
-                } else {
-                    try (ObjectInputStream input = new ObjectInputStream(new ByteArrayInputStream(Base64.decode(encoded, Base64.DEFAULT)))) {
-                        Object value = input.readObject();
-                        if (value instanceof List<?> values) {
-                            for (Object date : values) if (date instanceof String) dates.add((String) date);
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            android.util.Log.w("Moadeal", "기존 출석 기록 형식을 확인할 수 없습니다.", e);
-        }
-        return dates;
+        return new HashSet<>(preferences.getStringSet("attendance." + account, Collections.emptySet()));
     }
     boolean checkIn() {
         Set<String> dates = attendance();
@@ -221,7 +370,7 @@ final class Store {
                 if (favorite(p)) matches.add(p);
             } else if ((!region.city.isEmpty() || !p.id.startsWith("regional|"))
                     && region.includes(p.region) && (category < 0 || category == p.category)
-                    && (stage < 0 || stage == p.stage())
+                    && (stage < 0 || (stage == 0 ? p.recruiting() : stage == p.stage()))
                     && (p.title.toLowerCase(java.util.Locale.KOREA).contains(search) || p.region.label().contains(search))) matches.add(p);
         }
         if (favorites || region.city.isEmpty()) return matches;
@@ -261,11 +410,7 @@ final class Store {
     }
 
     private void restoreRegionalFavorites() {
-        Set<String> keys = new HashSet<>(preferences.getAll().keySet());
-        for (String key : context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE).getAll().keySet()) {
-            if (key.startsWith("flutter.")) keys.add(key.substring(8));
-        }
-        for (String key : keys) {
+        for (String key : preferences.getAll().keySet()) {
             int index = key.indexOf("regional|");
             if (!key.startsWith("favorite.") || index < 0) continue;
             String[] parts = key.substring(index).split("\\|", -1);

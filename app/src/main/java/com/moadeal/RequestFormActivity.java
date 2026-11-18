@@ -1,12 +1,12 @@
 package com.moadeal;
 
-import android.app.DatePickerDialog;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.widget.*;
-import java.util.Calendar;
+import com.google.android.gms.tasks.Task;
+import com.google.android.gms.tasks.Tasks;
 import java.util.UUID;
 import static com.moadeal.Models.*;
 
@@ -14,14 +14,19 @@ public class RequestFormActivity extends BaseActivity {
     private EditText name, description, price, target;
     private Spinner category;
     private Region region;
-    private String photo = "";
+    private String photo = "", productId;
     private long deadline;
-    private Button regionButton, photoButton, dateButton;
+    private Button regionButton, photoButton, dateButton, submitButton;
+    private Submission pending;
+
+    private record Submission(Product product, String uid, Task<Void> task) {}
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         region = new Region(getIntent().getStringExtra("city"), getIntent().getStringExtra("district"), getIntent().getStringExtra("neighborhood"));
         if (region.city == null) region = store.demoRegions.get(0).copy();
+        productId = state == null ? null : state.getString("productId");
+        if (productId == null) productId = "request-" + UUID.randomUUID();
         deadline = System.currentTimeMillis() + 7L * 86400000;
         if (state != null) {
             photo = state.getString("photo", ""); deadline = state.getLong("deadline");
@@ -45,32 +50,88 @@ public class RequestFormActivity extends BaseActivity {
         category.setId(R.id.request_category);
         price = Ui.field(this, content, store.seller() ? "판매 단가" : "희망 단가", "", InputType.TYPE_CLASS_NUMBER, R.id.request_price);
         target = Ui.field(this, content, "목표 인원", "", InputType.TYPE_CLASS_NUMBER, R.id.request_target);
-        dateButton = Ui.button(this, content, "모집 마감일 · " + Store.date(deadline), () -> pickDeadline());
-        primary(store.seller() ? "판매 상품 올리기" : "구매 요청 올리기", this::save);
+        dateButton = Ui.button(this, content, "모집 마감일 · " + Store.date(deadline), this::pickDeadline);
+        submitButton = primary(store.seller() ? "판매 상품 올리기" : "구매 요청 올리기", this::save);
+        if (getLastNonConfigurationInstance() instanceof Submission submission) {
+            pending = submission;
+            submitButton.setEnabled(false);
+        }
     }
 
+    @Override protected void onStart() {
+        super.onStart();
+        if (pending != null && !isFinishing()) observe(pending);
+    }
+
+    @Override public Object onRetainNonConfigurationInstance() { return pending; }
+
     private void pickDeadline() {
-        Calendar calendar = Calendar.getInstance(); calendar.setTimeInMillis(deadline);
-        DatePickerDialog dialog = new DatePickerDialog(this, (picker, year, month, day) -> {
-            Calendar date = Calendar.getInstance(); date.set(year, month, day, 23, 59, 59);
-            deadline = date.getTimeInMillis(); dateButton.setText("모집 마감일 · " + Store.date(deadline));
-        }, calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH), calendar.get(Calendar.DAY_OF_MONTH));
-        dialog.getDatePicker().setMinDate(System.currentTimeMillis() - 1000);
-        dialog.getDatePicker().setMaxDate(System.currentTimeMillis() + 90L * 86400000);
-        dialog.show();
+        Ui.pickEndDate(this, deadline, selected -> {
+            deadline = selected;
+            dateButton.setText("모집 마감일 · " + Store.date(deadline));
+        });
     }
 
     private void save() {
-        if (!Ui.required(name) || description != null && !Ui.required(description)) return;
+        if (pending != null || !Ui.required(name) || description != null && !Ui.required(description)) return;
+        String title = Ui.value(name);
+        String details = description == null ? "" : Ui.value(description);
+        if (trades != null && (!withinLength(name, title, 200)
+                || description != null && !withinLength(description, details, 6000))) return;
         int unitPrice = Ui.number(price, 1), people = Ui.number(target, 2);
         if (unitPrice < 0 || people < 0) return;
-        Product product = new Product(); product.id = "request-" + UUID.randomUUID();
-        product.title = Ui.value(name); product.owner = store.account;
-        if (!store.seller()) product.members.add(store.account);
+        Product product = new Product(); product.id = productId;
+        product.title = title; product.owner = store.account;
+        product.sellerProduct = store.seller();
+        if (!product.sellerListing()) product.members.add(store.account);
         product.region = region.copy(); product.price = unitPrice; product.target = people;
         product.photo = photo; product.category = category.getSelectedItemPosition(); product.deadline = deadline;
-        if (description != null) product.description = Ui.value(description);
-        store.products.add(0, product);
+        product.description = details;
+        if (trades == null) {
+            store.products.add(0, product);
+            openProduct(product);
+            return;
+        }
+
+        String uid = accounts.currentUid();
+        if (!canHandleTrade(uid)) return;
+        product.remote = true;
+        product.hasRemotePhoto = !photo.isEmpty();
+        FirebaseAccounts session = accounts;
+        FirebaseTrades repository = trades;
+        Task<Void> task = ProductImages.encode(getApplicationContext(), photo)
+            .onSuccessTask(blob -> uid.equals(session.currentUid())
+                ? repository.createProduct(product, blob)
+                : Tasks.forException(new IllegalStateException("계정이 변경됐어요.")));
+        pending = new Submission(product, uid, task);
+        submitButton.setEnabled(false);
+        observe(pending);
+    }
+
+    private boolean withinLength(EditText field, String value, int maxLength) {
+        if (value.codePointCount(0, value.length()) <= maxLength) return true;
+        field.setError(maxLength + "자 이내로 입력하세요.");
+        field.requestFocus();
+        return false;
+    }
+
+    private void observe(Submission submission) {
+        submission.task().addOnCompleteListener(this, result -> {
+            if (pending != submission || !canHandleTrade(submission.uid())) return;
+            pending = null;
+            submitButton.setEnabled(true);
+            if (!result.isSuccessful()) {
+                note(submission.product().hasRemotePhoto
+                    ? "사진이나 상품을 올리지 못했습니다. 연결 또는 사진을 확인하고 다시 시도해 주세요."
+                    : "상품을 올리지 못했습니다. 다시 시도해 주세요.");
+                return;
+            }
+            store.putFirebaseProduct(submission.product());
+            openProduct(submission.product());
+        });
+    }
+
+    private void openProduct(Product product) {
         Ui.open(this, DetailActivity.class, "product", product.id); finish();
     }
 
@@ -91,6 +152,7 @@ public class RequestFormActivity extends BaseActivity {
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString("city", region.city); state.putString("district", region.district); state.putString("neighborhood", region.neighborhood);
         state.putString("photo", photo); state.putLong("deadline", deadline); state.putInt("category", category.getSelectedItemPosition());
+        state.putString("productId", productId);
         super.onSaveInstanceState(state);
     }
 }

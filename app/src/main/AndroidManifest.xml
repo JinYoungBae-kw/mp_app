@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:name=".MoadealApplication"
         android:allowBackup="true"
@@ -7,8 +8,8 @@
         android:icon="@drawable/ic_acorn"
         android:theme="@style/Theme.Moadeal"
         android:supportsRtl="true">
+        <meta-data android:name="com.naver.maps.map.NCP_KEY_ID" android:value="${naverMapClientId}" />
         <activity android:name=".RegionActivity" android:exported="false" />
-        <activity android:name=".CommunityActivity" android:exported="false" />
         <activity android:name=".ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".RoomFormActivity" android:exported="false" />
         <activity android:name=".ProfileActivity" android:exported="false" />
@@ -17,6 +18,7 @@
         <activity android:name=".CollectionActivity" android:exported="false" />
         <activity android:name=".RequestFormActivity" android:exported="false" />
         <activity android:name=".OfferFormActivity" android:exported="false" />
+        <activity android:name=".PickupMapActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".OfferListActivity" android:exported="false" />
         <activity android:name=".DetailActivity" android:exported="false" />
         <activity android:name=".VerificationActivity" android:exported="false" />

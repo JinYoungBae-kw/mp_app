@@ -2,6 +2,20 @@ plugins {
     id 'com.android.application'
 }
 
+def localMoadealSettings = providers.fileContents(rootProject.layout.projectDirectory.file('local.properties')).asText.map { content ->
+    def localSettings = new Properties()
+    localSettings.load(new StringReader(content))
+    localSettings
+}
+def pickupSearchUrl = providers.gradleProperty('moadeal.pickupSearchUrl')
+    .orElse(localMoadealSettings.map { it.getProperty('moadeal.pickupSearchUrl', '') }).orElse('')
+def naverMapClientId = providers.gradleProperty('moadeal.naverMapClientId')
+    .orElse(localMoadealSettings.map { it.getProperty('moadeal.naverMapClientId', '') }).orElse('').get().trim()
+
+if (file('google-services.json').isFile()) {
+    apply plugin: 'com.google.gms.google-services'
+}
+
 android {
     namespace 'com.moadeal'
     compileSdk 36
@@ -12,20 +26,24 @@ android {
         targetSdk 36
         versionCode 2
         versionName '0.2.0'
-        testInstrumentationRunner 'com.moadeal.NativeSmokeTest'
+        buildConfigField 'String', 'PICKUP_SEARCH_URL', groovy.json.JsonOutput.toJson(pickupSearchUrl.get().trim())
+        buildConfigField 'String', 'NAVER_MAP_CLIENT_ID', groovy.json.JsonOutput.toJson(naverMapClientId)
+        manifestPlaceholders.naverMapClientId = naverMapClientId
+    }
+    buildFeatures {
+        buildConfig true
     }
     compileOptions {
         coreLibraryDesugaringEnabled true
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    buildTypes {
-        release {
-            signingConfig signingConfigs.debug
-        }
-    }
 }
 
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    implementation platform('com.google.firebase:firebase-bom:35.2.0')
+    implementation 'com.google.firebase:firebase-auth'
+    implementation 'com.google.firebase:firebase-firestore'
+    implementation 'com.naver.maps:map-sdk:3.24.1'
 }

@@ -1,0 +1,310 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function profilePath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function hasRole(role) {
+      return signedIn() && get(profilePath(request.auth.uid)).data.role == role;
+    }
+
+    function hasFields(data, fields) {
+      return data.keys().hasAll(fields) && data.keys().hasOnly(fields);
+    }
+
+    function validText(value, minSize, maxSize) {
+      return value is string && value.size() >= minSize && value.size() <= maxSize;
+    }
+
+    function productPath(productId) {
+      return /databases/$(database)/documents/products/$(productId);
+    }
+
+    function tradeMemberPath(uid, productId) {
+      return /databases/$(database)/documents/users/$(uid)/tradeMemberships/$(productId);
+    }
+
+    function photoPath(productId) {
+      return /databases/$(database)/documents/products/$(productId)/photos/main;
+    }
+
+    function recruiting(product) {
+      return product.participantCount < product.target && product.deadline > request.time
+        && product.offer == null && product.selectedAt == null;
+    }
+
+    function today() {
+      return int((request.time.toMillis() + 32400000) / 86400000.0);
+    }
+
+    function dayKey(productId, day) {
+      return productId + '_' + string(day);
+    }
+
+    function dayPath(productId) {
+      let key = dayKey(productId, today());
+      return /databases/$(database)/documents/tradeDays/$(key);
+    }
+
+    function likePath(productId, uid) {
+      return /databases/$(database)/documents/products/$(productId)/likes/$(uid);
+    }
+
+    function roomPath(roomId) {
+      return /databases/$(database)/documents/rooms/$(roomId);
+    }
+
+    function roomMemberPath(uid, roomId) {
+      return /databases/$(database)/documents/users/$(uid)/joinedRooms/$(roomId);
+    }
+
+    match /users/{uid} {
+      function validName() {
+        return validText(request.resource.data.name, 1, 24);
+      }
+
+      allow get: if isOwner(uid);
+      allow create: if isOwner(uid) && validName()
+        && request.resource.data.keys().hasOnly(['name', 'role'])
+        && request.resource.data.role in ['buyer', 'seller'];
+      allow update: if isOwner(uid) && validName()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']);
+
+      match /tradeMemberships/{productId} {
+        function joinedWithProduct() {
+          let product = productPath(productId);
+          let next = getAfter(product).data;
+          return (!exists(product) && next.ownerUid == uid && next.sellerListing == false
+              && next.participantCount == 1)
+            || (exists(product) && get(product).data.ownerUid != uid && recruiting(get(product).data)
+              && next.participantCount == get(product).data.participantCount + 1);
+        }
+
+        function canceledWithProduct() {
+          let product = productPath(productId);
+          let previous = get(product).data;
+          return previous.ownerUid != uid && recruiting(previous)
+            && getAfter(product).data.participantCount == previous.participantCount - 1;
+        }
+
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && hasRole('buyer')
+          && hasFields(request.resource.data, ['joinedAt'])
+          && request.resource.data.joinedAt == request.time && joinedWithProduct();
+        allow delete: if isOwner(uid) && hasRole('buyer') && canceledWithProduct();
+      }
+
+      match /joinedRooms/{roomId} {
+        function joinedWithRoom() {
+          let room = roomPath(roomId);
+          let next = getAfter(room).data;
+          return (!exists(room) && next.ownerUid == uid && next.memberCount == 1)
+            || (exists(room) && next.memberCount == get(room).data.memberCount + 1);
+        }
+
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && hasFields(request.resource.data, ['joinedAt'])
+          && request.resource.data.joinedAt == request.time && joinedWithRoom();
+      }
+
+      match /tradeViewDays/{statsId} {
+        function validViewDay(data) {
+          let product = get(productPath(data.productId)).data;
+          return hasFields(data, ['productId', 'day', 'views'])
+            && data.productId is string && data.day is int && data.day == today()
+            && statsId == dayKey(data.productId, data.day)
+            && data.views is int && data.views >= 1 && data.views <= 2147483647
+            && product.sellerListing && product.ownerUid == uid;
+        }
+
+        allow read: if isOwner(uid);
+        allow create: if hasRole('buyer') && validViewDay(request.resource.data)
+          && request.resource.data.views == 1;
+        allow update: if hasRole('buyer') && validViewDay(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views'])
+          && request.resource.data.views == resource.data.views + 1;
+      }
+    }
+
+    match /products/{productId} {
+      function validProduct(data) {
+        return hasFields(data, ['ownerUid', 'sellerListing', 'title', 'description',
+          'city', 'district', 'neighborhood', 'category', 'price', 'target', 'deadline',
+          'createdAt', 'participantCount', 'offer', 'selectedAt', 'comparisonPrice', 'hasPhoto'])
+          && data.ownerUid == request.auth.uid && data.sellerListing is bool
+          && validText(data.title, 1, 200) && validText(data.description, data.sellerListing ? 1 : 0, 6000)
+          && validText(data.city, 1, 100) && validText(data.district, 0, 100)
+          && validText(data.neighborhood, 0, 100)
+          && data.category is int && data.category >= 0 && data.category <= 2
+          && data.price is int && data.price >= 1 && data.price <= 2147483647
+          && data.target is int && data.target >= 2 && data.target <= 2147483647
+          && data.comparisonPrice is int && data.comparisonPrice >= 0 && data.comparisonPrice <= 2147483647
+          && data.deadline is timestamp && data.deadline > request.time && data.createdAt == request.time
+          && data.participantCount is int && data.offer == null && data.selectedAt == null
+          && data.hasPhoto is bool && data.hasPhoto == existsAfter(photoPath(productId));
+      }
+
+      function validInitialParticipants(data) {
+        let member = tradeMemberPath(request.auth.uid, productId);
+        return (data.sellerListing && hasRole('seller') && data.participantCount == 0)
+          || (!data.sellerListing && hasRole('buyer') && data.participantCount == 1
+            && !exists(member) && existsAfter(member));
+      }
+
+      function validParticipantChange() {
+        let member = tradeMemberPath(request.auth.uid, productId);
+        let before = resource.data.participantCount;
+        let after = request.resource.data.participantCount;
+        return hasRole('buyer') && request.auth.uid != resource.data.ownerUid && recruiting(resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participantCount'])
+          && after is int && after >= 0
+          && ((!exists(member) && existsAfter(member) && after == before + 1)
+            || (exists(member) && !existsAfter(member) && after == before - 1));
+      }
+
+      function validOffer(offer) {
+        return offer is map && hasFields(offer, ['sellerUid', 'price', 'quantity', 'place', 'address', 'expiry', 'createdAt'])
+          && offer.sellerUid == request.auth.uid
+          && offer.price is int && offer.price >= 1 && offer.price <= 2147483647
+          && offer.quantity is int && offer.quantity >= resource.data.target && offer.quantity <= 2147483647
+          && validText(offer.place, 1, 150) && validText(offer.address, 1, 300)
+          && offer.expiry is timestamp && offer.expiry > request.time && offer.createdAt == request.time;
+      }
+
+      function submittedOffer() {
+        return hasRole('seller') && !resource.data.sellerListing
+          && resource.data.participantCount >= resource.data.target
+          && resource.data.offer == null && resource.data.selectedAt == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['offer'])
+          && validOffer(request.resource.data.offer);
+      }
+
+      function selectedOffer() {
+        return isOwner(resource.data.ownerUid) && hasRole('buyer') && !resource.data.sellerListing
+          && resource.data.offer != null && resource.data.offer.expiry > request.time && resource.data.selectedAt == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selectedAt'])
+          && request.resource.data.selectedAt == request.time;
+      }
+
+      allow read: if signedIn();
+      allow create: if signedIn() && productId.matches('request-[a-f0-9-]{36}')
+        && validProduct(request.resource.data) && validInitialParticipants(request.resource.data);
+      allow update: if signedIn() && (validParticipantChange() || submittedOffer() || selectedOffer());
+
+      match /questions/{questionId} {
+        function authorizedSeller(product) {
+          return hasRole('seller') && ((product.sellerListing && product.ownerUid == request.auth.uid)
+            || (product.offer != null && product.offer.sellerUid == request.auth.uid));
+        }
+
+        allow read: if signedIn() && exists(productPath(productId));
+        allow create: if hasRole('buyer') && exists(productPath(productId))
+          && hasFields(request.resource.data, ['authorUid', 'text', 'createdAt', 'answer', 'answeredAt', 'answererUid'])
+          && request.resource.data.authorUid == request.auth.uid && validText(request.resource.data.text, 1, 240)
+          && request.resource.data.createdAt == request.time && request.resource.data.answer == null
+          && request.resource.data.answeredAt == null && request.resource.data.answererUid == null;
+        allow update: if signedIn() && resource.data.answer == null
+          && authorizedSeller(get(productPath(productId)).data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answer', 'answeredAt', 'answererUid'])
+          && validText(request.resource.data.answer, 1, 240) && request.resource.data.answeredAt == request.time
+          && request.resource.data.answererUid == request.auth.uid;
+      }
+
+      match /photos/{photoId} {
+        function pairedPhoto() {
+          let product = productPath(productId);
+          let data = getAfter(product).data;
+          return !exists(product) && data.ownerUid == request.auth.uid && data.hasPhoto;
+        }
+
+        allow get: if signedIn() && photoId == 'main' && exists(productPath(productId));
+        allow create: if signedIn() && photoId == 'main' && pairedPhoto()
+          && hasFields(request.resource.data, ['jpeg']) && request.resource.data.jpeg is bytes
+          && request.resource.data.jpeg.size() > 0 && request.resource.data.jpeg.size() <= 122880;
+      }
+
+      match /likes/{uid} {
+        function changedDailyLikes(delta) {
+          let path = dayPath(productId);
+          let before = exists(path) ? get(path).data.likes : 0;
+          return getAfter(path).data.likes == before + delta;
+        }
+
+        function newLike() {
+          return hasFields(request.resource.data, ['day']) && request.resource.data.day is int
+            && request.resource.data.day == today() && changedDailyLikes(1);
+        }
+
+        allow get: if isOwner(uid);
+        allow create: if isOwner(uid) && hasRole('buyer') && newLike();
+        allow update: if isOwner(uid) && hasRole('buyer') && resource.data.day < today() && newLike();
+        allow delete: if isOwner(uid) && hasRole('buyer')
+          && (resource.data.day < today() || (resource.data.day == today() && changedDailyLikes(-1)));
+      }
+    }
+
+    match /tradeDays/{statsId} {
+      function validDay(data) {
+        return hasFields(data, ['productId', 'day', 'likes'])
+          && data.productId is string && data.day is int && data.day == today()
+          && statsId == dayKey(data.productId, data.day)
+          && data.likes is int && data.likes >= 0 && data.likes <= 2147483647
+          && exists(productPath(data.productId));
+      }
+
+      function validStatsChange(data, likes) {
+        let like = likePath(data.productId, request.auth.uid);
+        let likedBefore = exists(like) && get(like).data.day == data.day;
+        let likedAfter = existsAfter(like) && getAfter(like).data.day == data.day;
+        return (!likedBefore && likedAfter && data.likes == likes + 1)
+          || (likedBefore && !likedAfter && data.likes == likes - 1);
+      }
+
+      allow read: if signedIn();
+      allow create: if hasRole('buyer') && validDay(request.resource.data)
+        && validStatsChange(request.resource.data, 0);
+      allow update: if hasRole('buyer') && validDay(request.resource.data)
+        && validStatsChange(request.resource.data, resource.data.likes);
+    }
+
+    match /rooms/{roomId} {
+      function validRoom(data) {
+        return hasFields(data, ['ownerUid', 'name', 'area', 'description', 'category', 'memberCount', 'createdAt'])
+          && data.ownerUid == request.auth.uid && validText(data.name, 1, 30) && validText(data.area, 1, 30)
+          && validText(data.description, 1, 100) && data.category in ['식품', '미용', '생필품', '동네가게']
+          && data.memberCount is int && data.memberCount == 1 && data.createdAt == request.time;
+      }
+
+      function newMember() {
+        let member = roomMemberPath(request.auth.uid, roomId);
+        return !exists(member) && existsAfter(member);
+      }
+
+      allow read: if signedIn();
+      allow create: if signedIn() && validRoom(request.resource.data) && newMember();
+      allow update: if signedIn() && newMember()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount'])
+        && request.resource.data.memberCount is int
+        && request.resource.data.memberCount == resource.data.memberCount + 1;
+
+      match /messages/{messageId} {
+        allow read: if signedIn() && exists(roomPath(roomId));
+        allow create: if signedIn() && exists(roomPath(roomId))
+          && exists(roomMemberPath(request.auth.uid, roomId))
+          && hasFields(request.resource.data, ['senderUid', 'senderName', 'text', 'sentAt'])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.senderName == get(profilePath(request.auth.uid)).data.name
+          && validText(request.resource.data.text, 1, 4000) && request.resource.data.sentAt == request.time;
+      }
+    }
+  }
+}

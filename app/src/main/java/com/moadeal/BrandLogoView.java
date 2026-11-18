@@ -21,7 +21,6 @@ public class BrandLogoView extends View {
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         if (bitmap == null) return;
-        // Same logo crop as the Flutter brand widget.
         Rect crop = new Rect(Math.round(bitmap.getWidth() * .1725f), Math.round(bitmap.getHeight() * .375f),
             Math.round(bitmap.getWidth() * .9225f), Math.round(bitmap.getHeight() * .625f));
         canvas.drawBitmap(bitmap, crop, new RectF(0, 0, getWidth(), getHeight()), paint);

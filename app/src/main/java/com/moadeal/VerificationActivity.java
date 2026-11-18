@@ -26,12 +26,12 @@ public class VerificationActivity extends BaseActivity {
             "예시 판매자 계정으로 상품 등록과 판매관리를 체험할 수 있어요."
         }[step], 16, false);
         if (step == 0) Ui.button(this, content, attached ? "예시 사업자등록증 첨부됨" : "예시 사업자등록증 첨부", () -> { attached = true; render(); });
-        primary(new String[]{"심사 요청", "예시 심사 결과 보기", "판매자 홈으로"}[step], () -> {
+        Button next = primary(new String[]{"심사 요청", "예시 심사 결과 보기", "판매자 홈으로"}[step], () -> {
             if (step == 2) {
                 startActivity(new Intent(this, HomeActivity.class)); finish();
             } else { step++; render(); }
         });
-        footer.getChildAt(0).setEnabled(step != 0 || attached);
+        next.setEnabled(step != 0 || attached);
     }
 
     @Override protected void onSaveInstanceState(Bundle state) {

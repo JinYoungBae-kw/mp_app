@@ -15,7 +15,11 @@ public class HistoryActivity extends BaseActivity {
         if (state != null) complete = state.getBoolean("complete");
         title(section);
     }
-    @Override protected void onResume() { super.onResume(); render(); }
+    @Override protected void onResume() {
+        super.onResume();
+        render();
+        watchTradeCatalog(this::renderRows);
+    }
     private void render() {
         scroll();
         if ("판매관리".equals(section)) {
@@ -34,7 +38,7 @@ public class HistoryActivity extends BaseActivity {
             switch (section) {
                 case "판매관리":
                     if (!store.seller()) break;
-                    if (p.sellerListing() && (complete ? p.completed() : p.recruiting())) {
+                    if (p.sellerListing() && p.owner.equals(store.account) && (complete ? p.completed() : p.recruiting())) {
                         Ui.productRow(this, rows, p, p.joined() + "/" + p.target + "명 · 판매 희망 수량 " + p.target + "개\n개당 " + Store.won(p.price));
                     }
                     for (Offer offer : p.offers) {
@@ -43,10 +47,17 @@ public class HistoryActivity extends BaseActivity {
                         }
                     }
                     break;
-                case "요청내역":
-                    if (p.recruiting() && p.members.contains(store.account)) Ui.productRow(this, rows, p,
-                        (p.owner.equals(store.account) ? "내가 모집 중" : "참여 중") + " · " + p.joined() + "/" + p.target + "명\n희망 단가 " + Store.won(p.price));
+                case "요청내역": {
+                    if (!p.members.contains(store.account)) break;
+                    boolean recruiting = p.recruiting();
+                    if (recruiting || p.awaitingOfferSelection()) {
+                        String status = recruiting
+                            ? (p.owner.equals(store.account) ? "내가 모집 중" : "참여 중")
+                            : p.stageLabel();
+                        Ui.productRow(this, rows, p, status + " · " + p.joined() + "/" + p.target + "명\n희망 단가 " + Store.won(p.price));
+                    }
                     break;
+                }
                 case "구매내역":
                     if (p.members.contains(store.account) && (p.completed() || p.selected != null)) Ui.productRow(this, rows, p,
                         p.joined() + "명 공동구매 성사\n개당 " + Store.won(p.completed() ? p.price : p.selected.price));
@@ -54,6 +65,12 @@ public class HistoryActivity extends BaseActivity {
                 case "관심 내역":
                     if (store.favorite(p)) Ui.productRow(this, rows, p, p.stageLabel() + "\n개당 " + Store.won(p.price));
                     break;
+            }
+        }
+        if (!complete && store.seller() && "판매관리".equals(section)) {
+            for (Product p : store.products) {
+                if (p.canReceiveOffer()) Ui.productRow(this, rows, p,
+                    p.stageLabel() + " · " + p.joined() + "/" + p.target + "명\n희망 단가 " + Store.won(p.price));
             }
         }
         if (rows.getChildCount() == 0) Ui.text(this, rows, switch (section) {

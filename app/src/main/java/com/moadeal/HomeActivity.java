@@ -36,6 +36,7 @@ public class HomeActivity extends BaseActivity {
         super.onResume(); render();
         ScrollView scroll = findViewById(R.id.page_scroll);
         if (scroll != null) scroll.post(() -> scroll.scrollTo(0, scrollY));
+        watchTradeCatalog(this::renderTradeRows);
     }
     @Override protected void onPause() {
         ScrollView scroll = findViewById(R.id.page_scroll);
@@ -45,6 +46,7 @@ public class HomeActivity extends BaseActivity {
 
     private void render() {
         title(tab.equals("홈") ? "모아딜" : tab);
+        results = null;
         scroll();
         brand();
         navigation();
@@ -174,8 +176,20 @@ public class HomeActivity extends BaseActivity {
     private void sellerHome() {
         Ui.text(this, content, "내 판매 상품", 24, true);
         Ui.primary(Ui.button(this, content, "상품 등록", this::register));
-        for (Product p : store.products) if (p.sellerListing()) {
-            Ui.productRow(this, content, p, Store.won(p.price) + " · " + p.stageLabel()
+        results = Ui.column(this, content);
+        renderSellerProducts();
+    }
+
+    private void renderTradeRows() {
+        if (results == null) return;
+        if (store.seller()) renderSellerProducts();
+        else renderProducts();
+    }
+
+    private void renderSellerProducts() {
+        results.removeAllViews();
+        for (Product p : store.products) if (p.sellerListing() && p.owner.equals(store.account)) {
+            Ui.productRow(this, results, p, Store.won(p.price) + " · " + p.stageLabel()
                 + "\n" + p.joined() + "/" + p.target + "명 · 최근 7일 조회 " + p.views() + "회");
         }
     }
@@ -194,14 +208,15 @@ public class HomeActivity extends BaseActivity {
         ImageView person = new ImageView(this); person.setImageResource(R.drawable.ic_person);
         profileRow.addView(person, new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40)));
         LinearLayout name = Ui.column(this, profileRow); Ui.weighted(name, 1);
-        Ui.text(this, name, Store.accountId(store.account) + "   ›", 19, true);
+        Ui.text(this, name, store.accountId(store.account) + "   ›", 19, true);
         Ui.text(this, name, store.profileName().isEmpty() ? store.seller() ? "판매자" : "구매자" : store.profileName(), 14, false);
         profile.setOnClickListener(view -> Ui.open(this, ProfileActivity.class, null, null));
         LinearLayout transactions = Ui.card(this, content);
         Ui.text(this, transactions, "나의 거래", 20, true);
-        String[] labels = store.seller() ? new String[]{"판매관리"} : new String[]{"요청내역", "판매 제안 작성", "구매내역", "관심 내역"};
+        String registerLabel = "구매 요청 등록";
+        String[] labels = store.seller() ? new String[]{"판매관리"} : new String[]{"요청내역", registerLabel, "구매내역", "관심 내역"};
         for (String label : labels) Ui.button(this, transactions, label + "   ›", () -> {
-            if (label.equals("판매 제안 작성")) register();
+            if (label.equals(registerLabel)) register();
             else Ui.open(this, HistoryActivity.class, "section", label);
         });
         LinearLayout attendance = Ui.card(this, content);

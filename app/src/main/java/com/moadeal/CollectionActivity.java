@@ -23,7 +23,11 @@ public class CollectionActivity extends BaseActivity {
             }).show();
         });
     }
-    @Override protected void onResume() { super.onResume(); render(); }
+    @Override protected void onResume() {
+        super.onResume();
+        render();
+        watchTradeCatalog(() -> renderKeepingScroll(this::render));
+    }
 
     private void render() {
         scroll();

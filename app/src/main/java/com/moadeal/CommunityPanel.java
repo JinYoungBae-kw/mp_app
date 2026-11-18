@@ -2,13 +2,18 @@ package com.moadeal;
 
 import android.widget.*;
 import android.view.View;
-import java.util.ArrayList;
+import com.google.firebase.firestore.ListenerRegistration;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 import static com.moadeal.Models.*;
 
 final class CommunityPanel {
     private final BaseActivity activity;
     private final LinearLayout parent;
     private LinearLayout results;
+    private List<FirebaseCommunity.RoomSummary> sharedRooms = Collections.emptyList();
+    private Set<String> joinedRooms = Collections.emptySet();
     static class State {
         String query = "", category = "전체";
         boolean joinedOnly;
@@ -16,7 +21,6 @@ final class CommunityPanel {
     private final State state;
     static final String[] CATEGORIES = {"식품", "미용", "생필품", "동네가게"};
 
-    CommunityPanel(BaseActivity activity, LinearLayout parent) { this(activity, parent, new State()); }
     CommunityPanel(BaseActivity activity, LinearLayout parent, State state) {
         this.activity = activity; this.parent = parent; this.state = state;
     }
@@ -48,25 +52,76 @@ final class CommunityPanel {
         results = Ui.column(activity, parent);
         Ui.primary(Ui.button(activity, parent, "＋ 모임 만들기", () -> Ui.open(activity, RoomFormActivity.class, null, null)));
         renderRooms();
+        observeSharedRooms();
+    }
+
+    private void observeSharedRooms() {
+        FirebaseCommunity community = ((MoadealApplication) activity.getApplication()).community();
+        if (community == null || activity.accounts == null) return;
+        String uid = activity.accounts.currentUid();
+        if (uid == null || !activity.store.hasFirebaseProfile(uid)) return;
+        View.OnAttachStateChangeListener watcher = new View.OnAttachStateChangeListener() {
+            private ListenerRegistration rooms, memberships;
+
+            @Override public void onViewAttachedToWindow(View view) {
+                rooms = community.watchRooms(activity, (value, error) -> {
+                    if (!view.isAttachedToWindow() || !uid.equals(activity.accounts.currentUid())) return;
+                    if (error != null) {
+                        activity.note("공유 모임을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
+                    } else if (value != null) {
+                        sharedRooms = value;
+                        renderRooms();
+                    }
+                });
+                memberships = community.watchJoinedRooms(activity, uid, (value, error) -> {
+                    if (!view.isAttachedToWindow() || !uid.equals(activity.accounts.currentUid())) return;
+                    if (error != null) {
+                        activity.note("참여한 모임을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
+                    } else if (value != null) {
+                        joinedRooms = value;
+                        renderRooms();
+                    }
+                });
+            }
+
+            @Override public void onViewDetachedFromWindow(View view) {
+                if (rooms != null) rooms.remove();
+                if (memberships != null) memberships.remove();
+            }
+        };
+        results.addOnAttachStateChangeListener(watcher);
+        if (results.isAttachedToWindow()) watcher.onViewAttachedToWindow(results);
     }
 
     private void renderRooms() {
         if (results == null) return;
         results.removeAllViews();
+        for (FirebaseCommunity.RoomSummary room : sharedRooms) {
+            renderRoom(room.name, room.description, room.area, room.category, "", room.memberCount,
+                joinedRooms.contains(room.id), () -> Ui.open(activity, ChatActivity.class, "sharedRoom", room.id));
+        }
         for (Room room : activity.store.rooms) {
-            if (state.joinedOnly && !room.members.contains(activity.store.account)) continue;
-            if (!state.category.equals("전체") && !state.category.equals(room.category)) continue;
-            if (!(room.name + room.area).contains(state.query)) continue;
-            View row = activity.getLayoutInflater().inflate(R.layout.item_row, results, false);
-            ((TextView) row.findViewById(R.id.row_title)).setText(room.name);
-            ((TextView) row.findViewById(R.id.row_description)).setText(room.description + "\n" + room.area + " · " + (room.sampleMembers + room.members.size()) + "명");
-            Ui.image(activity, row.findViewById(R.id.row_photo), room.photo);
-            row.setOnClickListener(view -> Ui.open(activity, ChatActivity.class, "room", room.id));
-            results.addView(row);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-            params.bottomMargin = Ui.dp(activity, 12); row.setLayoutParams(params);
+            renderRoom(room.name, room.description, room.area, room.category, room.photo,
+                room.sampleMembers + room.members.size(), room.members.contains(activity.store.account),
+                () -> Ui.open(activity, ChatActivity.class, "room", room.id));
         }
         if (results.getChildCount() == 0) Ui.text(activity, results, state.joinedOnly
             ? "조건에 맞는 참여 중인 채팅이 없어요." : "조건에 맞는 모임이 없어요.", 16, false);
+    }
+
+    private void renderRoom(String name, String description, String area, String category, String photo, long memberCount,
+            boolean joined, Runnable open) {
+        if (state.joinedOnly && !joined) return;
+        if (!state.category.equals("전체") && !state.category.equals(category)) return;
+        if (!(name + area).contains(state.query)) return;
+        View row = activity.getLayoutInflater().inflate(R.layout.item_row, results, false);
+        ((TextView) row.findViewById(R.id.row_title)).setText(name);
+        ((TextView) row.findViewById(R.id.row_description)).setText(description + "\n" + area + " · " + memberCount + "명");
+        Ui.image(activity, row.findViewById(R.id.row_photo), photo);
+        row.setOnClickListener(view -> open.run());
+        results.addView(row);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.bottomMargin = Ui.dp(activity, 12);
+        row.setLayoutParams(params);
     }
 }

@@ -18,8 +18,8 @@ public class AttendanceActivity extends BaseActivity {
         ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); card.addView(progress);
         ObjectAnimator.ofInt(progress, "progress", 0, percent).setDuration(360).start();
         Ui.text(this, card, percent == 100 ? "출석 목표를 모두 채웠어요." : "한국 시간으로 하루에 한 번, 출석하면 10%씩 올라가요.", 16, false);
-        primary(checked ? "오늘 출첵 완료" : percent == 100 ? "출석 목표 달성" : "출첵!", () -> { store.checkIn(); render(); });
-        footer.getChildAt(0).setEnabled(!checked && percent < 100);
+        Button checkIn = primary(checked ? "오늘 출첵 완료" : percent == 100 ? "출석 목표 달성" : "출첵!", () -> { store.checkIn(); render(); });
+        checkIn.setEnabled(!checked && percent < 100);
     }
     @Override void onDayChanged() { render(); }
 }
